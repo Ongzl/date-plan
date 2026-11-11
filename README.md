@@ -4,12 +4,12 @@ Suggests a short itinerary for two people's next meet-up. See [PRODUCT_BRIEF.md]
 
 ## First-time setup
 
-1. Get an API key at [console.anthropic.com](https://console.anthropic.com) (Settings → API keys). Each plan costs about a cent.
+1. Plans are written by the Kimi K3 model through OpenCode. Sign in at [opencode.ai](https://opencode.ai), add credit, then go to **Account → Personal API keys → Add API key**. The key is only shown once. Each plan costs a few cents at most.
 2. In this folder, copy the example settings file:
    ```bash
    cp .env.example .env
    ```
-3. Open `.env` and paste your key after `ANTHROPIC_API_KEY=`. `.env` is git-ignored, so the key never gets committed.
+3. Open `.env` and paste your key after `OPENCODE_API_KEY=`. `.env` is git-ignored, so the key never gets committed.
 4. If you're on a fresh copy without the `.venv` folder, install the dependencies:
    ```bash
    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -29,10 +29,10 @@ Open http://127.0.0.1:5001, then fill in the day, start time and area, and press
 .venv/bin/pytest
 ```
 
-The tests use a fake Claude, so they're free and work offline.
+The tests use a fake model, so they're free and work offline.
 
 ## Files
 
 - `itinerary.py` defines what a plan is and the rules it must follow (3–5 stops, times in order).
-- `planner.py` asks Claude for a plan and turns any failure into a friendly message.
+- `planner.py` asks Kimi K3 for a plan, rejects replies from any other model, and turns any failure into a friendly message.
 - `app.py` and `templates/index.html` are the page.

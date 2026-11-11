@@ -1,13 +1,17 @@
-"""Ask Claude for a suggested meet-up plan."""
+"""Ask Kimi K3 (through OpenCode) for a suggested meet-up plan."""
 
+import json
 import os
 
-import anthropic
+import openai
 import pydantic
 
 from itinerary import MAX_STOPS, MIN_STOPS, Itinerary, ItineraryError, PlanRequest, check_itinerary
 
-MODEL = "claude-opus-5-5"
+MODEL = "kimi-k3"
+# OpenCode's OpenAI-compatible endpoint; the SDK adds /chat/completions.
+BASE_URL = "https://opencode.ai/inference/openai/v1"
+KEY_NAME = "OPENCODE_API_KEY"
 
 SYSTEM_PROMPT = f"""\
 You plan a next meet-up for two people in Singapore who met recently and are \
@@ -21,7 +25,12 @@ realistic travel time between stops.
 
 For each stop give: the start time as HH:MM in 24-hour time, the activity, the \
 place, and a one-line note on why it helps them get to know each other. The \
-first stop starts at the time they give. Give the plan a short, friendly title."""
+first stop starts at the time they give. Give the plan a short, friendly title.
+
+Reply with only a JSON object, no other text, in exactly this shape:
+{{"title": "...", "stops": [{{"time": "14:00", "activity": "...", "place": "...", "note": "..."}}]}}"""
+
+TRY_AGAIN = "Couldn't make a plan this time. Please try again."
 
 
 class PlanError(Exception):
@@ -36,36 +45,51 @@ def build_prompt(request: PlanRequest) -> str:
     )
 
 
+def read_itinerary(text: str) -> Itinerary:
+    """Pull the JSON object out of the model's reply, even if it's wrapped in ``` fences."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end < start:
+        raise ValueError("no JSON object in reply")
+    return Itinerary.model_validate_json(text[start : end + 1])
+
+
 def suggest_plan(request: PlanRequest, client=None) -> Itinerary:
-    """Return a checked itinerary, or raise PlanError with a friendly message."""
-    if client is None and not os.environ.get("ANTHROPIC_API_KEY"):
-        raise PlanError("No Anthropic API key found. Add it to your .env file.")
+    """Return a checked itinerary written by Kimi K3, or raise PlanError."""
+    if client is None:
+        key = os.environ.get(KEY_NAME)
+        if not key:
+            raise PlanError(f"No OpenCode API key found. Add {KEY_NAME} to your .env file.")
+        client = openai.OpenAI(api_key=key, base_url=BASE_URL)
+
     try:
-        client = client or anthropic.Anthropic()
-        response = client.beta.messages.parse(
+        response = client.chat.completions.create(
             model=MODEL,
-            max_tokens=16000,
-            output_config={"effort": "low"},
-            # If Claude declines, Anthropic retries on a suitable other model.
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_prompt(request)}],
-            output_format=Itinerary,
+            max_tokens=8000,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": build_prompt(request)},
+            ],
         )
-    except anthropic.AuthenticationError:
-        raise PlanError("The Anthropic API key is missing or wrong. Check your .env file.") from None
-    except anthropic.RateLimitError:
-        raise PlanError("Too many requests just now. Wait a minute and try again.") from None
-    except anthropic.APIConnectionError:
-        raise PlanError("Couldn't reach Claude. Check your internet connection and try again.") from None
-    except (anthropic.AnthropicError, pydantic.ValidationError):
-        raise PlanError("Couldn't make a plan this time. Please try again.") from None
+    except openai.AuthenticationError:
+        raise PlanError("The OpenCode API key is missing or wrong. Check your .env file.") from None
+    except openai.RateLimitError:
+        raise PlanError("Too many requests, or out of OpenCode credit. Wait a minute and try again.") from None
+    except openai.APIConnectionError:
+        raise PlanError("Couldn't reach OpenCode. Check your internet connection and try again.") from None
+    except openai.OpenAIError:
+        raise PlanError(TRY_AGAIN) from None
 
-    if response.stop_reason == "refusal" or response.parsed_output is None:
-        raise PlanError("Couldn't make a plan this time. Please try again.")
+    # Only accept a plan that Kimi K3 actually wrote.
+    if MODEL not in (response.model or "").lower():
+        raise PlanError(f"The plan came from {response.model!r}, not Kimi K3, so it wasn't used.")
+
+    reply = response.choices[0].message.content if response.choices else None
+    try:
+        itinerary = read_itinerary(reply or "")
+    except (ValueError, pydantic.ValidationError):
+        raise PlanError(TRY_AGAIN) from None
 
     try:
-        return check_itinerary(response.parsed_output, request)
+        return check_itinerary(itinerary, request)
     except ItineraryError:
         raise PlanError("The suggested plan didn't quite add up. Please try again.") from None

@@ -1,12 +1,12 @@
 from datetime import date, time
 from types import SimpleNamespace
 
-import anthropic
 import httpx2
+import openai
 import pytest
 
 from itinerary import Itinerary, PlanRequest, Stop
-from planner import PlanError, build_prompt, suggest_plan
+from planner import PlanError, build_prompt, read_itinerary, suggest_plan
 
 REQUEST = PlanRequest(day=date(2026, 11, 14), start_time=time(14, 0), area="Tiong Bahru")
 
@@ -21,22 +21,23 @@ GOOD = Itinerary(
 
 
 class FakeClient:
-    """Stands in for anthropic.Anthropic so tests run offline and free."""
+    """Stands in for openai.OpenAI so tests run offline and free."""
 
-    def __init__(self, parsed=GOOD, stop_reason="end_turn", error=None):
+    def __init__(self, reply=GOOD.model_dump_json(), model="kimi-k3", error=None):
         self.calls = []
-        self._parsed, self._stop_reason, self._error = parsed, stop_reason, error
-        self.beta = SimpleNamespace(messages=SimpleNamespace(parse=self._parse))
+        self._reply, self._model, self._error = reply, model, error
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
-    def _parse(self, **kwargs):
+    def _create(self, **kwargs):
         self.calls.append(kwargs)
         if self._error:
             raise self._error
-        return SimpleNamespace(stop_reason=self._stop_reason, parsed_output=self._parsed)
+        message = SimpleNamespace(content=self._reply)
+        return SimpleNamespace(model=self._model, choices=[SimpleNamespace(message=message)])
 
 
 def api_error(cls, status):
-    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    request = httpx2.Request("POST", "https://opencode.ai/inference/openai/v1/chat/completions")
     return cls("boom", response=httpx2.Response(status, request=request), body=None)
 
 
@@ -44,47 +45,54 @@ def test_returns_checked_plan():
     assert suggest_plan(REQUEST, client=FakeClient()) == GOOD
 
 
-def test_sends_pair_details_and_asks_for_itinerary_shape():
+def test_asks_kimi_k3_with_pair_details():
     client = FakeClient()
     suggest_plan(REQUEST, client=client)
     call = client.calls[0]
-    assert call["model"] == "claude-opus-5-5"
-    assert call["output_format"] is Itinerary
-    assert call["fallbacks"] == "default"
-    prompt = call["messages"][0]["content"]
-    assert "Saturday 14 November 2026" in prompt
-    assert "14:00" in prompt
-    assert "Tiong Bahru" in prompt
+    assert call["model"] == "kimi-k3"
+    system, user = call["messages"]
+    assert system["role"] == "system" and "JSON" in system["content"]
+    assert user["content"] == build_prompt(REQUEST)
 
 
 def test_prompt_text():
     assert build_prompt(REQUEST) == "Day: Saturday 14 November 2026\nFree from: 14:00\nArea: Tiong Bahru"
 
 
-def test_refusal_becomes_friendly_error():
+def test_reply_from_another_model_is_rejected():
+    with pytest.raises(PlanError, match="not Kimi K3"):
+        suggest_plan(REQUEST, client=FakeClient(model="kimi-k2.6"))
+
+
+def test_reads_json_wrapped_in_code_fences():
+    assert read_itinerary(f"Here you go:\n```json\n{GOOD.model_dump_json()}\n```") == GOOD
+
+
+@pytest.mark.parametrize("reply", [None, "", "Sorry, I can't help", '{"title": "No stops"}'])
+def test_unreadable_reply_becomes_friendly_error(reply):
     with pytest.raises(PlanError, match="try again"):
-        suggest_plan(REQUEST, client=FakeClient(parsed=None, stop_reason="refusal"))
+        suggest_plan(REQUEST, client=FakeClient(reply=reply))
 
 
 def test_plan_breaking_rules_becomes_friendly_error():
     bad = Itinerary(title="Too short", stops=GOOD.stops[:1])
     with pytest.raises(PlanError, match="didn't quite add up"):
-        suggest_plan(REQUEST, client=FakeClient(parsed=bad))
+        suggest_plan(REQUEST, client=FakeClient(reply=bad.model_dump_json()))
 
 
 def test_missing_key_becomes_friendly_error(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with pytest.raises(PlanError, match="No Anthropic API key"):
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    with pytest.raises(PlanError, match="No OpenCode API key"):
         suggest_plan(REQUEST)
 
 
 @pytest.mark.parametrize(
     "error, message",
     [
-        (api_error(anthropic.AuthenticationError, 401), "API key"),
-        (api_error(anthropic.RateLimitError, 429), "Too many requests"),
-        (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x")), "internet"),
-        (api_error(anthropic.InternalServerError, 500), "try again"),
+        (api_error(openai.AuthenticationError, 401), "API key"),
+        (api_error(openai.RateLimitError, 429), "Too many requests"),
+        (openai.APIConnectionError(request=httpx2.Request("POST", "https://x")), "internet"),
+        (api_error(openai.InternalServerError, 500), "try again"),
     ],
 )
 def test_api_errors_become_friendly_errors(error, message):
