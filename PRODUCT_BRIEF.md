@@ -37,6 +37,8 @@ If it goes wrong: they see random date ideas that don't fit either of them, and 
 ## Build decisions
 - A small Python (Flask) web page, run on a laptop, that the pair look at together on one screen. No logins.
 - Claude writes the suggested itinerary. This needs an Anthropic API key and costs a small amount per plan.
+- Story 1 asks the pair for only the day, the time they're free from, and an area in Singapore. It doesn't ask about their interests yet; fitting the plan to them both is story 2.
+- A suggested plan has 3–5 stops, with times in order, over about 3–4 hours. Nothing is saved.
 
 ## Not building
 - Anything that matches people or replaces the platform they met on.
