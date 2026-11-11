@@ -385,3 +385,44 @@ def test_cannot_reach_onemap(monkeypatch):
     fake_urlopen(monkeypatch, error=URLError("offline"))
     with pytest.raises(TravelError, match="Couldn't reach OneMap"):
         OneMap("t").find("Somewhere")
+
+
+# --- Stops checked on Google Maps ---------------------------------------
+
+
+def test_postal_code_comes_from_the_end_of_the_address():
+    from travel import postal_code
+
+    assert postal_code("33 Tg Pagar Rd, #01-01, Singapore 088456") == "088456"
+    assert postal_code("Duxton Hl") == ""
+    assert postal_code("") == ""
+
+
+def test_stop_with_google_address_is_found_by_postal_code_not_nearest_branch():
+    google_checked = GOOD.model_copy(update={"stops": [
+        GOOD.stops[0].model_copy(update={"address": "56 Eng Hoon St, #01-70, Singapore 160056"}),
+        *GOOD.stops[1:],
+    ]})
+    by_postal_code = Place("160056", 1.2850, 103.8320)
+    client = FakeOneMap(places={**PLACES, "160056": by_postal_code})
+    travel = plan_travel(google_checked, REQUEST, client=client)
+    assert ("160056", None) in client.finds
+    assert ("Tiong Bahru Bakery", None) not in client.finds and not any(t == "Tiong Bahru Bakery" for t, _ in client.finds)
+    assert (travel.places[0].lat, travel.places[0].lng, travel.places[0].name) == (1.2850, 103.8320, "Tiong Bahru Bakery")
+
+
+def test_falls_back_to_the_name_if_postal_code_is_not_on_onemap():
+    google_checked = GOOD.model_copy(update={"stops": [
+        GOOD.stops[0].model_copy(update={"address": "1 Nowhere Rd, Singapore 999999"}),
+        *GOOD.stops[1:],
+    ]})
+    travel = plan_travel(google_checked, REQUEST, client=FakeOneMap())
+    assert travel.places[0] == PLACES["Tiong Bahru Bakery"]
+
+
+def test_google_directions_go_to_the_address_shown():
+    address = "56 Eng Hoon St, #01-70, Singapore 160056"
+    google_checked = GOOD.model_copy(update={"stops": [GOOD.stops[0].model_copy(update={"address": address}), *GOOD.stops[1:]]})
+    travel = plan_travel(google_checked, REQUEST, client=FakeOneMap())
+    assert travel.legs[0].google_url == google_maps_link(f"Tiong Bahru Bakery, {address}", "Tiong Bahru estate")
+    assert travel.legs[0].origin == "Tiong Bahru Bakery"  # the page still shows the name
