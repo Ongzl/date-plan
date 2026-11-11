@@ -39,7 +39,8 @@ class PlanError(Exception):
 
 def build_prompt(request: PlanRequest) -> str:
     return (
-        f"Day: {request.day:%A %-d %B %Y}\n"
+        # Build the day number separately: "%-d" only works on macOS/Linux.
+        f"Day: {request.day:%A} {request.day.day} {request.day:%B %Y}\n"
         f"Free from: {request.start_time:%H:%M}\n"
         f"Area: {request.area}"
     )

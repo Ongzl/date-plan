@@ -46,7 +46,7 @@
   {% if itinerary %}
   <section class="plan">
     <h2>{{ itinerary.title }}</h2>
-    <p class="when">{{ plan_request.day.strftime('%A %-d %B') }} · {{ plan_request.area }}</p>
+    <p class="when">{{ plan_request.day.strftime('%A') }} {{ plan_request.day.day }} {{ plan_request.day.strftime('%B') }} · {{ plan_request.area }}</p>
     <ol>
       {% for stop in itinerary.stops %}
       <li>

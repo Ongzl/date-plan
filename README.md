@@ -10,10 +10,12 @@ Suggests a short itinerary for two people's next meet-up. See [PRODUCT_BRIEF.md]
    cp .env.example .env
    ```
 3. Open `.env` and paste your key after `OPENCODE_API_KEY=`. `.env` is git-ignored, so the key never gets committed.
-4. If you're on a fresh copy without the `.venv` folder, install the dependencies:
+4. If you're on a fresh copy without the `.venv` folder, install the dependencies (needs Python 3.10 or newer; check with `python3 --version`):
    ```bash
    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
    ```
+
+> **On Windows:** use `py -3.11` (or another 3.10+ version) instead of `python3`, and `.venv\Scripts\` instead of `.venv/bin/` in every command here. For example, `py -3.11 -m venv .venv` then `.venv\Scripts\pip install -r requirements.txt`, and run the app with `.venv\Scripts\python app.py`.
 
 ## Run it
 
