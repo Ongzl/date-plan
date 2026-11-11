@@ -121,3 +121,31 @@ def test_missing_key_becomes_friendly_error(monkeypatch):
 def test_api_errors_become_friendly_errors(error, message):
     with pytest.raises(PlanError, match=message):
         suggest_plan(REQUEST, client=FakeClient(error=error))
+
+
+def test_prompt_asks_which_stops_take_bookings():
+    client = FakeClient()
+    suggest_plan(REQUEST, client=client)
+    assert '"reservable"' in client.calls[0]["messages"][0]["content"]
+
+
+def test_reservable_defaults_to_false_when_model_leaves_it_out():
+    reply = '{"title": "T", "stops": [{"time": "14:00", "activity": "a", "place": "p", "note": "n"}]}'
+    assert read_itinerary(reply).stops[0].reservable is False
+
+
+def test_prompt_asks_for_booking_url():
+    client = FakeClient()
+    suggest_plan(REQUEST, client=client)
+    assert '"booking_url"' in client.calls[0]["messages"][0]["content"]
+
+
+def test_booking_links_are_checked_before_plan_is_returned():
+    checked = []
+
+    def checker(itinerary):
+        checked.append(itinerary)
+        return itinerary
+
+    assert suggest_plan(REQUEST, client=FakeClient(), link_checker=checker) == GOOD
+    assert checked == [GOOD]

@@ -37,4 +37,5 @@ The tests use a fake model, so they're free and work offline.
 
 - `itinerary.py` defines what a plan is and the rules it must follow (3–5 stops, times in order).
 - `planner.py` asks GLM-5.3 Flash for a plan, rejects replies from any other model, and turns any failure into a friendly message.
+- `links.py` checks the reservation links the model suggests. Stops the model thinks take bookings get a **Reserve** button that opens the place's booking page in a new tab. The model has no web access, so its links are guesses: any that don't load are dropped, and the button searches for the place's booking page instead.
 - `app.py` and `templates/index.html` are the page.

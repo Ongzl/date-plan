@@ -75,3 +75,17 @@ def test_cuisine_kept_after_planner_problem():
 
     response = client_with(failing).post("/plan", data={**FORM, "cuisine": "Thai"})
     assert '<option value="Thai" selected>' in response.get_data(as_text=True)
+
+
+def test_reservable_stops_get_a_reserve_link_that_opens_in_a_new_tab():
+    stops = [
+        GOOD.stops[0].model_copy(update={"reservable": True, "booking_url": "https://good.example/book"}),
+        GOOD.stops[1],
+        GOOD.stops[2].model_copy(update={"reservable": True}),
+    ]
+    itinerary = GOOD.model_copy(update={"stops": stops})
+    page = client_with(lambda r: itinerary).post("/plan", data=FORM).get_data(as_text=True)
+    assert page.count("Reserve ↗") == 2
+    assert 'href="https://good.example/book" target="_blank" rel="noopener noreferrer"' in page
+    assert "https://www.google.com/search?q=BooksActually+reservation" in page
+    assert page.count("Opens a search for its booking page") == 1

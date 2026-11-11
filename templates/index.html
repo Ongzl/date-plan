@@ -27,6 +27,9 @@
     .time { font-weight: 700; }
     .place, .note { color: var(--muted); }
     .note { font-style: italic; }
+    .reserve { display: inline-block; margin-top: 8px; padding: 6px 14px; border: 1px solid var(--accent); border-radius: 999px; color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: none; }
+    .reserve:hover, .reserve:focus-visible { background: var(--accent); color: #fff; }
+    .hint { margin-left: 8px; font-size: 13px; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -59,6 +62,10 @@
         <div><span class="time">{{ stop.time }}</span> · {{ stop.activity }}</div>
         <div class="place">{{ stop.place }}</div>
         {% if stop.note %}<div class="note">{{ stop.note }}</div>{% endif %}
+        {% if stop.reservable %}
+        <a class="reserve" href="{{ stop.reservation_url }}" target="_blank" rel="noopener noreferrer">Reserve ↗</a>
+        {% if not stop.booking_url %}<span class="hint">Opens a search for its booking page</span>{% endif %}
+        {% endif %}
       </li>
       {% endfor %}
     </ol>
