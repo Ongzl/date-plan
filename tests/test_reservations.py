@@ -171,3 +171,18 @@ def test_failed_check_keeps_planner_guess_but_drops_its_unchecked_link():
 )
 def test_booking_link_detection(url, text, expected):
     assert looks_like_booking(url, text) is expected
+
+
+def test_http_website_from_google_is_upgraded_to_https_so_it_can_be_opened():
+    place = {**PS_CAFE, "websiteUri": "http://pscafe.example"}
+    result = harness(happy_path(), places=[place]).check_stop(STOP, "Dempsey Hill")
+    assert result.booking_url == CHOPE
+
+
+def test_harness_uses_low_reasoning_and_room_for_it():
+    calls = []
+    model = happy_path()
+    original = model.chat.completions.create
+    model.chat.completions.create = lambda **kw: calls.append(kw) or original(**kw)
+    harness(model).check_stop(STOP, "x")
+    assert all(c["reasoning_effort"] == "low" and c["max_tokens"] >= 8000 for c in calls)

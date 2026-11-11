@@ -177,3 +177,30 @@ def test_harness_is_used_when_places_key_is_set(monkeypatch):
     monkeypatch.setattr(planner, "ReservationHarness", FakeHarness)
     suggest_plan(REQUEST, client=FakeClient())
     assert used == [("glm-5.3-flash", "k"), "Tiong Bahru"]
+
+
+def test_empty_reply_is_retried_once():
+    replies = ["", GOOD.model_dump_json()]
+    client = FakeClient()
+    original = client._create
+
+    def create(**kwargs):
+        client._reply = replies.pop(0)
+        return original(**kwargs)
+
+    client.chat.completions.create = create
+    assert suggest_plan(REQUEST, client=client, link_checker=lambda it: it) == GOOD
+    assert len(client.calls) == 2
+
+
+def test_gives_up_after_two_unreadable_replies():
+    client = FakeClient(reply="")
+    with pytest.raises(PlanError, match="try again"):
+        suggest_plan(REQUEST, client=client, link_checker=lambda it: it)
+    assert len(client.calls) == 2
+
+
+def test_leaves_room_for_reasoning():
+    client = FakeClient()
+    suggest_plan(REQUEST, client=client, link_checker=lambda it: it)
+    assert client.calls[0]["max_tokens"] >= 16000
