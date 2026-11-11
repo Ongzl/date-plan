@@ -298,6 +298,33 @@ class _Looker:
         return leg
 
 
+def postal_code(address: str) -> str:
+    """The 6-digit Singapore postal code at the end of an address, or ''."""
+    found = re.findall(r"\b(\d{6})\b", address or "")
+    return found[-1] if found else ""
+
+
+def _locate(looker: _Looker, stop, near: Place | None) -> Place | None:
+    """Find a stop on OneMap.
+
+    A stop checked on Google Maps (reservations.py) has Google's address. Its
+    postal code is one building, so look that up first: the route then goes to
+    the same place the page shows, not whichever branch OneMap finds nearest.
+    """
+    code = postal_code(getattr(stop, "address", ""))
+    if code:
+        found = looker.find(code)
+        if found:
+            return Place(stop.place, found.lat, found.lng)
+    return looker.find(stop.place, near=near)
+
+
+def _where(stop) -> str:
+    """What to ask Google Maps for directions to: the address when it's known."""
+    address = getattr(stop, "address", "")
+    return f"{stop.place}, {address}" if address else stop.place
+
+
 def plan_travel(itinerary: Itinerary, request: PlanRequest, client=None) -> Travel:
     """Work out public-transport travel for a plan. Never raises: problems go on the legs."""
     stops = itinerary.stops
@@ -307,7 +334,7 @@ def plan_travel(itinerary: Itinerary, request: PlanRequest, client=None) -> Trav
 
     looker = _Looker(client)
     area = looker.find(request.area)
-    places = [looker.find(stop.place, near=area) for stop in stops]
+    places = [_locate(looker, stop, area) for stop in stops]
 
     start = first_leg = None
     start_text = request.start_from.strip()
@@ -316,12 +343,14 @@ def plan_travel(itinerary: Itinerary, request: PlanRequest, client=None) -> Trav
         first_stop = stops[0]
         first_leg = looker.leg(start_text, start, first_stop.place, places[0], request.day,
                                _minus(parse_time(first_stop.time), 60), first_stop.time)
+        first_leg.google_url = google_maps_link(start_text, _where(first_stop))
 
     legs = []
     for i, (here, there) in enumerate(zip(stops, stops[1:])):
         leg = looker.leg(here.place, places[i], there.place, places[i + 1], request.day,
                          parse_time(here.time), there.time)
         leg.tight = bool(leg.leave_by) and leg.leave_by < here.time
+        leg.google_url = google_maps_link(_where(here), _where(there))
         legs.append(leg)
 
     return Travel(places=places, legs=legs, start=start, first_leg=first_leg)
