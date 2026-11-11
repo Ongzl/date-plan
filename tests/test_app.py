@@ -29,7 +29,7 @@ def test_plan_shows_itinerary_with_times_and_places():
 
 
 @pytest.mark.parametrize("missing", ["day", "start_time", "area"])
-def test_missing_field_asks_again_without_calling_claude(missing):
+def test_missing_field_asks_again_without_calling_the_model(missing):
     calls = []
     form = {**FORM, missing: " " if missing == "area" else ""}
     response = client_with(lambda r: calls.append(r)).post("/plan", data=form)

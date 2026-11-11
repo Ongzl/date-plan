@@ -26,7 +26,7 @@ class Stop(BaseModel):
 
 
 class Itinerary(BaseModel):
-    """The shape Claude must reply in."""
+    """The shape the model must reply in."""
 
     title: str
     stops: list[Stop]
