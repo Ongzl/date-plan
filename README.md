@@ -4,7 +4,7 @@ Suggests a short itinerary for two people's next meet-up. See [PRODUCT_BRIEF.md]
 
 ## First-time setup
 
-1. Plans are written by the Kimi K3 model through OpenCode. Sign in at [opencode.ai](https://opencode.ai), add credit, then go to **Account → Personal API keys → Add API key**. The key is only shown once. Each plan costs a few cents at most.
+1. Plans are written by the GLM-5.3 Flash model through OpenCode. Sign in at [opencode.ai](https://opencode.ai), add credit, then go to **Account → Personal API keys → Add API key**. The key is only shown once. Each plan costs well under a cent.
 2. In this folder, copy the example settings file:
    ```bash
    cp .env.example .env
@@ -36,5 +36,5 @@ The tests use a fake model, so they're free and work offline.
 ## Files
 
 - `itinerary.py` defines what a plan is and the rules it must follow (3–5 stops, times in order).
-- `planner.py` asks Kimi K3 for a plan, rejects replies from any other model, and turns any failure into a friendly message.
+- `planner.py` asks GLM-5.3 Flash for a plan, rejects replies from any other model, and turns any failure into a friendly message.
 - `app.py` and `templates/index.html` are the page.

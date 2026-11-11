@@ -1,4 +1,4 @@
-"""Ask Kimi K3 (through OpenCode) for a suggested meet-up plan."""
+"""Ask GLM-5.3 Flash (through OpenCode) for a suggested meet-up plan."""
 
 import json
 import os
@@ -8,7 +8,8 @@ import pydantic
 
 from itinerary import MAX_STOPS, MIN_STOPS, Itinerary, ItineraryError, PlanRequest, check_itinerary
 
-MODEL = "kimi-k3"
+MODEL = "glm-5.3-flash"
+MODEL_LABEL = "GLM-5.3 Flash"
 # OpenCode's OpenAI-compatible endpoint; the SDK adds /chat/completions.
 BASE_URL = "https://opencode.ai/inference/openai/v1"
 KEY_NAME = "OPENCODE_API_KEY"
@@ -55,7 +56,7 @@ def read_itinerary(text: str) -> Itinerary:
 
 
 def suggest_plan(request: PlanRequest, client=None) -> Itinerary:
-    """Return a checked itinerary written by Kimi K3, or raise PlanError."""
+    """Return a checked itinerary written by GLM-5.3 Flash, or raise PlanError."""
     if client is None:
         key = os.environ.get(KEY_NAME)
         if not key:
@@ -75,7 +76,7 @@ def suggest_plan(request: PlanRequest, client=None) -> Itinerary:
         raise PlanError("The OpenCode API key is missing or wrong. Check your .env file.") from None
     except openai.PermissionDeniedError:
         raise PlanError(
-            "OpenCode won't let this key use Kimi K3. Turn on Kimi K3 under Models in your OpenCode console."
+            f"OpenCode won't let this key use {MODEL_LABEL}. Turn on {MODEL_LABEL} under Models in your OpenCode console."
         ) from None
     except openai.RateLimitError:
         raise PlanError("Too many requests, or out of OpenCode credit. Wait a minute and try again.") from None
@@ -84,9 +85,9 @@ def suggest_plan(request: PlanRequest, client=None) -> Itinerary:
     except openai.OpenAIError:
         raise PlanError(TRY_AGAIN) from None
 
-    # Only accept a plan that Kimi K3 actually wrote.
+    # Only accept a plan that this model actually wrote.
     if MODEL not in (response.model or "").lower():
-        raise PlanError(f"The plan came from {response.model!r}, not Kimi K3, so it wasn't used.")
+        raise PlanError(f"The plan came from {response.model!r}, not {MODEL_LABEL}, so it wasn't used.")
 
     reply = response.choices[0].message.content if response.choices else None
     try:

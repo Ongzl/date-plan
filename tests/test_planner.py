@@ -23,7 +23,7 @@ GOOD = Itinerary(
 class FakeClient:
     """Stands in for openai.OpenAI so tests run offline and free."""
 
-    def __init__(self, reply=GOOD.model_dump_json(), model="kimi-k3", error=None):
+    def __init__(self, reply=GOOD.model_dump_json(), model="glm-5.3-flash", error=None):
         self.calls = []
         self._reply, self._model, self._error = reply, model, error
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
@@ -45,11 +45,11 @@ def test_returns_checked_plan():
     assert suggest_plan(REQUEST, client=FakeClient()) == GOOD
 
 
-def test_asks_kimi_k3_with_pair_details():
+def test_asks_glm_flash_with_pair_details():
     client = FakeClient()
     suggest_plan(REQUEST, client=client)
     call = client.calls[0]
-    assert call["model"] == "kimi-k3"
+    assert call["model"] == "glm-5.3-flash"
     system, user = call["messages"]
     assert system["role"] == "system" and "JSON" in system["content"]
     assert user["content"] == build_prompt(REQUEST)
@@ -60,8 +60,8 @@ def test_prompt_text():
 
 
 def test_reply_from_another_model_is_rejected():
-    with pytest.raises(PlanError, match="not Kimi K3"):
-        suggest_plan(REQUEST, client=FakeClient(model="kimi-k2.6"))
+    with pytest.raises(PlanError, match="not GLM-5.3 Flash"):
+        suggest_plan(REQUEST, client=FakeClient(model="kimi-k3"))
 
 
 def test_reads_json_wrapped_in_code_fences():
@@ -90,7 +90,7 @@ def test_missing_key_becomes_friendly_error(monkeypatch):
     "error, message",
     [
         (api_error(openai.AuthenticationError, 401), "API key"),
-        (api_error(openai.PermissionDeniedError, 403), "Turn on Kimi K3"),
+        (api_error(openai.PermissionDeniedError, 403), "Turn on GLM-5.3 Flash"),
         (api_error(openai.RateLimitError, 429), "Too many requests"),
         (openai.APIConnectionError(request=httpx2.Request("POST", "https://x")), "internet"),
         (api_error(openai.InternalServerError, 500), "try again"),
