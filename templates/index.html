@@ -22,6 +22,12 @@
     button { font: inherit; font-weight: 600; padding: 12px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
     button:disabled { opacity: .6; cursor: wait; }
     .error { margin: 16px 0 0; padding: 12px 16px; border-radius: 8px; background: #fdecea; color: #8a2a1a; }
+    .error[hidden], .progress-hint[hidden] { display: none; }
+    .progress-hint { grid-column: 1 / -1; margin: -4px 0 0; font-size: 14px; color: var(--muted); text-align: center; }
+    button[aria-busy="true"]::before { content: ""; display: inline-block; width: 14px; height: 14px; margin-right: 10px; vertical-align: -2px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { button[aria-busy="true"]::before { animation: none; } }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
     .plan { margin-top: 32px; }
     .plan h2 { margin: 0; font-size: 22px; }
     .plan .when { margin: 0 0 16px; color: var(--muted); }
@@ -53,7 +59,7 @@
   <h1>Your next meet-up</h1>
   <p class="lede">Tell us when and where, and we'll suggest a plan to start from.</p>
 
-  <form method="post" action="/plan" onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Planning…'">
+  <form id="plan-form" method="post" action="{{ url_for('plan') }}" data-start-url="{{ url_for('start_plan') }}">
     <label>Day <input type="date" name="day" value="{{ form.day }}" required></label>
     <label>Free from <input type="time" name="start_time" value="{{ form.start_time }}" required></label>
     <label class="wide">Area in Singapore <input type="text" name="area" value="{{ form.area }}" placeholder="e.g. Tiong Bahru" required></label>
@@ -65,9 +71,11 @@
     </label>
     <label class="wide">Starting from <span class="optional">(optional, for travel to the first stop)</span> <input type="text" name="start_from" value="{{ form.start_from or '' }}" placeholder="e.g. Outram Park MRT"></label>
     <button type="submit">Suggest a plan</button>
+    <p class="progress-hint" id="plan-hint" hidden>This can take about a minute. We'll show each step as it happens.</p>
   </form>
+  <p class="visually-hidden" id="plan-status" role="status" aria-live="polite"></p>
 
-  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <p class="error" id="plan-error" role="alert"{% if not error %} hidden{% endif %}>{{ error or '' }}</p>
 
   {% macro leg_box(leg, label="") %}
   <div class="leg">
@@ -136,5 +144,77 @@
   </section>
   {% endif %}
 </main>
+<script>
+  // Issue #15: say what's happening while a plan is made, instead of a fixed "Planning…".
+  // Starts the plan as a background job and shows its latest step on the button.
+  // If anything here can't run, the form falls back to a normal (silent) submit.
+  (() => {
+    const form = document.getElementById("plan-form");
+    if (!form || !window.fetch || !window.FormData) return;
+    const button = form.querySelector('button[type="submit"]');
+    const label = button.textContent;
+    const hint = document.getElementById("plan-hint");
+    const status = document.getElementById("plan-status");
+    const errorBox = document.getElementById("plan-error");
+    const POLL_MS = 1000, MAX_MISSES = 5;
+    let busy = false;
+
+    const say = (message) => { button.textContent = message; status.textContent = message; };
+    const reset = () => {
+      busy = false;
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.textContent = label;
+      hint.hidden = true;
+    };
+    const fail = (message) => {
+      reset();
+      status.textContent = "";
+      errorBox.textContent = message;
+      errorBox.hidden = false;
+    };
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (busy) return;
+      busy = true;
+      const data = new FormData(form);
+      errorBox.hidden = true;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      hint.hidden = false;
+      say("Getting started…");
+
+      let job;
+      try {
+        const reply = await fetch(form.dataset.startUrl, { method: "POST", body: data });
+        if (!reply.ok) throw new Error("start failed");
+        job = await reply.json();
+      } catch {
+        form.submit();  // fall back to waiting for the whole plan in one request
+        return;
+      }
+
+      let misses = 0;
+      const poll = async () => {
+        try {
+          const reply = await fetch(job.status_url, { cache: "no-store" });
+          const state = await reply.json();
+          misses = 0;
+          if (reply.status === 404) return fail(state.message);
+          say(state.message);
+          if (state.done) return window.location.assign(job.result_url);
+        } catch {
+          if (++misses >= MAX_MISSES) return fail("Lost touch with the planner. Please try again.");
+        }
+        setTimeout(poll, POLL_MS);
+      };
+      setTimeout(poll, POLL_MS / 2);
+    });
+
+    // Coming back with the Back button can restore a busy-looking page from cache.
+    window.addEventListener("pageshow", (event) => { if (event.persisted) reset(); });
+  })();
+</script>
 </body>
 </html>

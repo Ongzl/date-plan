@@ -1,19 +1,60 @@
 """The page the pair look at together."""
 
+import inspect
 import logging
 from datetime import date
 
 import pydantic
 from dotenv import load_dotenv
-from flask import Flask, render_template, request
+from flask import Flask, abort, jsonify, render_template, request, url_for
 
+import progress as stages
 from itinerary import CUISINES, NO_PREFERENCE, PlanRequest
+from jobs import DONE, Jobs
 from planner import PlanError, suggest_plan
 from travel import plan_travel
 
+EXPIRED = "That plan is no longer available. Please make a new one."
 
-def create_app(planner=suggest_plan, travel=plan_travel) -> Flask:
+
+def _takes_progress(fn) -> bool:
+    """True if `fn` accepts a progress callback (test stand-ins often don't)."""
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "progress" or p.kind is p.VAR_KEYWORD for p in params)
+
+
+def create_app(planner=suggest_plan, travel=plan_travel, jobs: Jobs | None = None) -> Flask:
     app = Flask(__name__)
+    jobs = jobs or Jobs()
+
+    def make_plan(form: dict, progress=stages.ignore) -> tuple[dict, int]:
+        """Everything a plan needs, as (page context, HTTP status). Used by both ways of asking."""
+        try:
+            plan_request = PlanRequest(**form)
+            if not plan_request.area.strip():
+                raise ValueError
+        except (pydantic.ValidationError, ValueError, TypeError):
+            return {"form": form, "error": "Please fill in the day, a start time and an area."}, 400
+
+        try:
+            if _takes_progress(planner):
+                itinerary = planner(plan_request, progress=progress)
+            else:
+                itinerary = planner(plan_request)
+        except PlanError as problem:
+            return {"form": form, "error": str(problem)}, 502
+
+        progress(stages.TRAVEL)
+        try:
+            trip = travel(itinerary, plan_request)
+        except Exception:
+            app.logger.exception("Travel lookup failed")
+            trip = None  # travel problems never block the plan
+
+        return {"form": form, "itinerary": itinerary, "plan_request": plan_request, "travel": trip}, 200
 
     @app.context_processor
     def cuisines():
@@ -26,27 +67,34 @@ def create_app(planner=suggest_plan, travel=plan_travel) -> Flask:
 
     @app.post("/plan")
     def plan():
+        """The plain form post: waits for the whole plan. Used when the page's script can't run."""
+        page, code = make_plan(request.form.to_dict())
+        return render_template("index.html", **page), code
+
+    @app.post("/plan/start")
+    def start_plan():
+        """Start making a plan in the background; the page then follows its progress."""
         form = request.form.to_dict()
-        try:
-            plan_request = PlanRequest(**form)
-            if not plan_request.area.strip():
-                raise ValueError
-        except (pydantic.ValidationError, ValueError, TypeError):
-            error = "Please fill in the day, a start time and an area."
-            return render_template("index.html", form=form, error=error), 400
+        job = jobs.start(lambda report: make_plan(form, report), fallback_page={"form": form})
+        return jsonify(
+            status_url=url_for("plan_status", job_id=job.id),
+            result_url=url_for("plan_result", job_id=job.id),
+        ), 202
 
-        try:
-            itinerary = planner(plan_request)
-        except PlanError as problem:
-            return render_template("index.html", form=form, error=str(problem)), 502
+    @app.get("/plan/status/<job_id>")
+    def plan_status(job_id):
+        job = jobs.get(job_id)
+        if job is None:
+            return jsonify(done=True, message=EXPIRED), 404
+        return jsonify(done=job.state == DONE, message=job.message)
 
-        try:
-            trip = travel(itinerary, plan_request)
-        except Exception:
-            app.logger.exception("Travel lookup failed")
-            trip = None  # travel problems never block the plan
-
-        return render_template("index.html", form=form, itinerary=itinerary, plan_request=plan_request, travel=trip)
+    @app.get("/plan/result/<job_id>")
+    def plan_result(job_id):
+        job = jobs.get(job_id)
+        if job is None or job.state != DONE:
+            form = {"day": date.today().isoformat(), "start_time": "14:00", "area": "", "cuisine": NO_PREFERENCE, "start_from": ""}
+            return render_template("index.html", form=form, error=EXPIRED), 404
+        return render_template("index.html", **job.page), job.status_code
 
     return app
 

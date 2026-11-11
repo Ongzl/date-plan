@@ -18,7 +18,8 @@ from itinerary import (
     check_itinerary,
 )
 from links import check_booking_links
-from reservations import ReservationHarness, check_places, places_key, use_google_details
+import progress as stages
+from reservations import ReservationHarness, check_places, place_name, places_key, use_google_details
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,17 @@ def read_itinerary(text: str) -> Itinerary:
     return Itinerary.model_validate_json(text[start : end + 1])
 
 
-def suggest_plan(request: PlanRequest, client=None, link_checker=None, place_checker=None) -> Itinerary:
+def suggest_plan(request: PlanRequest, client=None, link_checker=None, place_checker=None, progress=None) -> Itinerary:
     """Return a checked itinerary written by GLM-5.3 Flash, or raise PlanError.
 
     `place_checker(itinerary, area)` looks every stop up on Google Maps and
     returns one PlaceCheck per stop. By default it uses Google Places when
     GOOGLE_PLACES_API_KEY is set; without a key, places aren't checked.
+
+    `progress(message)` is told what's happening before each slow step
+    (see progress.py), so the page can show it.
     """
+    progress = progress or stages.ignore
     if client is None:
         key = os.environ.get(KEY_NAME)
         if not key:
@@ -110,19 +115,22 @@ def suggest_plan(request: PlanRequest, client=None, link_checker=None, place_che
     # The model sometimes suggests places that have since closed. Ask again,
     # naming them, and as a last resort take them out of the plan.
     avoid: list[str] = []
+    progress(stages.WRITING)
     for _ in range(REPLANS + 1):
         itinerary = _checked_plan(client, request, avoid)
         if place_checker is None:
-            return _finish(itinerary, request, client, link_checker)
+            return _finish(itinerary, request, client, link_checker, progress)
+        progress(stages.CHECKING)
         checks = place_checker(itinerary, request.area)
         closed = [c for c in checks if c.closed]
         if not closed:
             # Show Google's name and address for every stop, never the planner's.
-            return _finish(use_google_details(itinerary, checks), request, client, link_checker)
+            return _finish(use_google_details(itinerary, checks), request, client, link_checker, progress)
         for c in closed:
             logger.info("%s %s", c.place, c.closed)
         avoid += [c.place for c in closed if c.place not in avoid]
         logger.info("Asking again without closed places: %s", avoid)
+        progress(stages.replacing([place_name(c.place) for c in closed]))
 
     closed_at = {c.index for c in closed}
     itinerary = use_google_details(itinerary, checks)
@@ -131,7 +139,7 @@ def suggest_plan(request: PlanRequest, client=None, link_checker=None, place_che
         itinerary = check_itinerary(itinerary.model_copy(update={"stops": still_open}), request)
     except ItineraryError:
         raise PlanError("The plans suggested kept including places that have closed. Please try again.") from None
-    return _finish(itinerary, request, client, link_checker)
+    return _finish(itinerary, request, client, link_checker, progress)
 
 
 def _checked_plan(client, request: PlanRequest, avoid: list[str]) -> Itinerary:
@@ -193,8 +201,10 @@ def _ask_for_plan(client, request: PlanRequest, avoid: list[str] = ()) -> Itiner
     return itinerary.model_copy(update={"stops": [s.model_copy(update=unchecked) for s in itinerary.stops]})
 
 
-def _finish(itinerary: Itinerary, request: PlanRequest, client, link_checker) -> Itinerary:
+def _finish(itinerary: Itinerary, request: PlanRequest, client, link_checker, progress=stages.ignore) -> Itinerary:
     """Check the plan's booking details before it is shown."""
+    if any(stop.reservable for stop in itinerary.stops):
+        progress(stages.BOOKING)
     if link_checker is not None:
         return link_checker(itinerary)
     key = places_key()
