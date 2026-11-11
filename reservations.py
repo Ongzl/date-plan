@@ -130,16 +130,120 @@ class ReservationCheck(BaseModel):
 # --- Google Places ---
 
 
-def search_places(query: str, key: str) -> list[dict]:
-    body = json.dumps({"textQuery": query, "regionCode": "SG", "pageSize": 3, "locationBias": SINGAPORE}).encode()
+def search_places(query: str, key: str, fields: str = PLACES_FIELDS, size: int = 3) -> list[dict]:
+    body = json.dumps({"textQuery": query, "regionCode": "SG", "pageSize": size, "locationBias": SINGAPORE}).encode()
     request = urllib.request.Request(
         PLACES_URL,
         data=body,
         method="POST",
-        headers={"Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": PLACES_FIELDS},
+        headers={"Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": fields},
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         return json.load(response).get("places", [])
+
+
+# --- Checking every place against Google Maps ---
+
+# Only what this check needs, which Google bills at a lower rate than `reservable`.
+STATUS_FIELDS = "places.id,places.displayName,places.formattedAddress,places.businessStatus,places.googleMapsUri"
+OPEN = "OPERATIONAL"
+CLOSED = {"CLOSED_PERMANENTLY": "has closed for good", "CLOSED_TEMPORARILY": "is closed for now"}
+
+
+def place_name(place: str) -> str:
+    """The name part of what the planner wrote, without the address or directions it
+    often adds after a comma or in brackets: "Papi's Tacos (5 Teck Lim Rd, ~10 min walk)"."""
+    name = re.split(r"[,(\[]", place, maxsplit=1)[0].strip(" -–—·")
+    return name or place.strip()
+
+
+def _name_words(name: str) -> set[str]:
+    """Words in a place's name, ignoring case, punctuation and plural 's'."""
+    words = re.findall(r"[a-z0-9]+", place_name(name).lower().replace("&", " and "))
+    return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words} - {"the", "and", "sg", "singapore"}
+
+
+def same_name(a: str, b: str) -> bool:
+    """True if one name's words are all in the other's: "PS.Cafe Harding" matches "PS.Cafe Harding Road"."""
+    words_a, words_b = _name_words(a), _name_words(b)
+    if not words_a or not words_b:
+        return False
+    shorter, longer = sorted((words_a, words_b), key=len)
+    return shorter <= longer
+
+
+@dataclass
+class PlaceCheck:
+    """What Google Maps says about one stop."""
+
+    index: int
+    place: str  # what the planner wrote
+    closed: str = ""  # why it's closed, e.g. "has closed for good"; "" if not
+    listing: dict | None = None  # the open Google listing with the same name, if there is one
+
+
+def look_up_place(place: str, area: str, key: str, search=search_places) -> tuple[str, dict | None]:
+    """Return (why it's closed or "", the matching open listing or None).
+
+    Only listings with the same name count. The name is searched in the area
+    first, then anywhere in Singapore: closed places drop out of searches by
+    address, and the planner's address is often wrong anyway. A place is only
+    called closed when it has listings and none of them is open.
+    """
+    name = place_name(place)
+    for query in (f"{name} {area} Singapore", f"{name} Singapore"):
+        matches = [p for p in search(query, key, fields=STATUS_FIELDS, size=5)
+                   if same_name(name, (p.get("displayName") or {}).get("text", ""))]
+        open_now = [p for p in matches if p.get("businessStatus", OPEN) == OPEN]
+        if open_now:
+            return "", open_now[0]  # the first is nearest the area: that's the order Google ranks them
+        closed = [CLOSED[p["businessStatus"]] for p in matches if p.get("businessStatus") in CLOSED]
+        if closed:
+            return closed[0], None
+    return "", None
+
+
+def check_places(itinerary: Itinerary, area: str, key: str, search=search_places) -> list[PlaceCheck]:
+    """Look every stop up on Google Maps, in parallel. A failed lookup counts as not found."""
+
+    def check(index: int) -> PlaceCheck:
+        place = itinerary.stops[index].place
+        try:
+            closed, listing = look_up_place(place, area, key, search)
+        except Exception as problem:
+            logger.warning("Couldn't look up %s on Google: %s", place, problem)
+            return PlaceCheck(index, place)
+        return PlaceCheck(index, place, closed, listing)
+
+    with ThreadPoolExecutor(max_workers=len(itinerary.stops) or 1) as pool:
+        checks = list(pool.map(check, range(len(itinerary.stops))))
+    for c in checks:
+        found = f"{c.listing['displayName']['text']}, {c.listing.get('formattedAddress', '')}" if c.listing else "not found"
+        logger.info("Google Maps check for %s: %s", c.place, c.closed or found)
+    return checks
+
+
+def use_google_details(itinerary: Itinerary, checks: list[PlaceCheck]) -> Itinerary:
+    """Show each stop with Google's name and address, never the planner's.
+
+    Stops Google knows get its name, address, place id and Maps link. For the
+    rest (walks, streets, places Google doesn't list) the planner's address is
+    dropped and only the name is kept, since it couldn't be checked.
+    """
+    stops = []
+    for stop, c in zip(itinerary.stops, checks):
+        listing = c.listing
+        if listing:
+            maps = listing.get("googleMapsUri", "")
+            stops.append(stop.model_copy(update={
+                "place": (listing.get("displayName") or {}).get("text") or place_name(stop.place),
+                "address": listing.get("formattedAddress", ""),
+                "place_id": listing.get("id", ""),
+                "maps_url": maps if looks_safe(maps) else "",
+            }))
+        else:
+            stops.append(stop.model_copy(update={"place": place_name(stop.place), "address": "", "place_id": ""}))
+    return itinerary.model_copy(update={"stops": stops})
 
 
 # --- Fetching pages ---
@@ -220,6 +324,15 @@ class _Session:
     seen_urls: set = field(default_factory=set)
     booking_hints: dict = field(default_factory=dict)  # url -> link text
     answer: dict | None = None
+
+
+def _describe(stop: Stop, area: str) -> str:
+    """The model's brief for one stop. Google's address, when known, pins down which outlet."""
+    lines = [f"Place: {stop.place}"]
+    if stop.address:
+        lines.append(f"Address (from Google Maps): {stop.address}. Pick the find_place result at this address.")
+    lines += [f"Area: {area}, Singapore", f"What they'll do there: {stop.activity}"]
+    return "\n".join(lines)
 
 
 def _clean(url: str) -> str:
@@ -304,7 +417,7 @@ class ReservationHarness:
         session = _Session()
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Place: {stop.place}\nArea: {area}, Singapore\nWhat they'll do there: {stop.activity}"},
+            {"role": "user", "content": _describe(stop, area)},
         ]
         for _ in range(MAX_TURNS):
             response = self.client.chat.completions.create(
@@ -339,11 +452,17 @@ class ReservationHarness:
 
     # Checking the model's answer
 
-    def _verify(self, session: _Session) -> ReservationCheck:
+    def _verify(self, session: _Session, stop: Stop | None = None) -> ReservationCheck:
         answer = session.answer or {}
         place = session.places.get(str(answer.get("place_id", "")))
         if place is None:
             return ReservationCheck(reservable=None, reason="Couldn't match the place on Google.")
+        if stop is not None and stop.place_id and place.get("id") != stop.place_id:
+            # The address shown is from the Google check; a booking link for another outlet would contradict it.
+            return ReservationCheck(reservable=None, reason="Matched a different Google listing from the one shown.")
+        if place.get("businessStatus") in CLOSED:
+            # The closed check should have caught this; never send anyone to book a closed place.
+            return ReservationCheck(reservable=False, reason=f"Google says it {CLOSED[place['businessStatus']]}.")
 
         maps_url = place.get("googleMapsUri", "") if looks_safe(place.get("googleMapsUri", "")) else ""
         google_says = place.get("reservable")  # True, False, or missing
@@ -373,7 +492,7 @@ class ReservationHarness:
 
     def check_stop(self, stop: Stop, area: str) -> ReservationCheck:
         try:
-            result = self._verify(self._run_model(stop, area))
+            result = self._verify(self._run_model(stop, area), stop)
         except Exception as problem:  # never lose the plan over a failed check
             logger.warning("Reservation check failed for %s: %s", stop.place, problem)
             return ReservationCheck(reservable=None, reason="Check failed.")
@@ -395,12 +514,12 @@ class ReservationHarness:
                 stops.append(stop)
             elif result.reservable is None:
                 # Couldn't tell: keep the planner's guess, but drop its unchecked link.
-                stops.append(stop.model_copy(update={"booking_url": "", "maps_url": result.maps_url}))
+                stops.append(stop.model_copy(update={"booking_url": "", "maps_url": stop.maps_url or result.maps_url}))
             else:
                 stops.append(stop.model_copy(update={
                     "reservable": result.reservable,
                     "booking_url": result.booking_url,
-                    "maps_url": result.maps_url,
+                    "maps_url": stop.maps_url or result.maps_url,
                     "checked": True,
                 }))
         return itinerary.model_copy(update={"stops": stops})

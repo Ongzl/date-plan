@@ -186,3 +186,26 @@ def test_harness_uses_low_reasoning_and_room_for_it():
     model.chat.completions.create = lambda **kw: calls.append(kw) or original(**kw)
     harness(model).check_stop(STOP, "x")
     assert all(c["reasoning_effort"] == "low" and c["max_tokens"] >= 8000 for c in calls)
+
+
+def test_booking_check_must_use_the_same_google_listing_as_the_address_shown():
+    shown = STOP.model_copy(update={"place_id": "other-outlet", "address": "1 Other Rd"})
+    result = harness(happy_path()).check_stop(shown, "Dempsey Hill")
+    assert result.reservable is None and result.booking_url == ""
+
+
+def test_booking_check_accepts_the_matching_listing():
+    shown = STOP.model_copy(update={"place_id": "place-1", "address": "28B Harding Rd, Singapore"})
+    assert harness(happy_path()).check_stop(shown, "Dempsey Hill").booking_url == CHOPE
+
+
+def test_model_is_told_googles_address():
+    model = happy_path()
+    harness(model).check_stop(STOP.model_copy(update={"address": "28B Harding Rd, Singapore"}), "Dempsey Hill")
+    assert "Address (from Google Maps): 28B Harding Rd, Singapore" in model.sent[0][1]["content"]
+
+
+def test_maps_link_from_the_address_check_is_kept():
+    shown = STOP.model_copy(update={"place_id": "place-1", "maps_url": "https://maps.google.com/?cid=shown"})
+    checked = harness(happy_path()).check_itinerary(Itinerary(title="T", stops=[shown]), "Dempsey Hill")
+    assert checked.stops[0].maps_url == "https://maps.google.com/?cid=shown"

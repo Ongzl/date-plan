@@ -33,6 +33,8 @@
     .note { font-style: italic; }
     .reserve { display: inline-block; margin-top: 8px; padding: 6px 14px; border: 1px solid var(--accent); border-radius: 999px; color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: none; }
     .reserve:hover, .reserve:focus-visible { background: var(--accent); color: #fff; }
+    .address { color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+    .address:hover { color: var(--accent); }
     .hint { margin-left: 8px; font-size: 13px; color: var(--muted); }
     .optional { font-size: 13px; }
     .leg { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: #f3ece5; font-size: 15px; }
@@ -90,7 +92,7 @@
       {% for stop in itinerary.stops %}
       <li>
         <div><span class="time">{{ stop.time }}</span> · {{ stop.activity }}</div>
-        <div class="place">{{ stop.place }}</div>
+        <div class="place">{{ stop.place }}{% if stop.address %} · {% if stop.maps_url %}<a class="address" href="{{ stop.maps_url }}" target="_blank" rel="noopener noreferrer" title="Open on Google Maps">{{ stop.address }}</a>{% else %}{{ stop.address }}{% endif %}{% endif %}</div>
         {% if stop.note %}<div class="note">{{ stop.note }}</div>{% endif %}
         {% if stop.reservable %}
         <a class="reserve" href="{{ stop.reservation_url }}" target="_blank" rel="noopener noreferrer">Reserve ↗</a>
