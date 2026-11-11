@@ -37,5 +37,16 @@ The tests use a fake model, so they're free and work offline.
 
 - `itinerary.py` defines what a plan is and the rules it must follow (3–5 stops, times in order).
 - `planner.py` asks GLM-5.3 Flash for a plan, rejects replies from any other model, and turns any failure into a friendly message.
-- `links.py` checks the reservation links the model suggests. Stops the model thinks take bookings get a **Reserve** button that opens the place's booking page in a new tab. The model has no web access, so its links are guesses: any that don't load are dropped, and the button searches for the place's booking page instead.
+- `links.py` checks the reservation links the model suggests. Stops the model thinks take bookings get a **Reserve** button that opens the place's booking page in a new tab. Without a Google key, the model's links are guesses: any that don't load are dropped, and the button searches for the place's booking page instead.
+- `reservations.py` is the reservation check, used when `GOOGLE_PLACES_API_KEY` is set. For each bookable-looking stop, the model looks the place up on Google Places and reads its website for a booking link, using tools. The harness then checks the answer itself: the place must be one Google returned, and a booking link must be one actually found on a page (never typed by the model) and look like a booking page. Whether the stop gets a **Reserve** button follows Google's "takes reservations" answer or a found booking page. With no booking page, the button opens the place on Google Maps.
+
+## Checking reservations (optional)
+
+To have the app check which stops really take bookings, add a Google Places key to `.env`:
+
+1. In [Google Cloud Console](https://console.cloud.google.com), create a project with billing on, and enable **Places API (New)**.
+2. Under **APIs & Services → Credentials**, create an API key. Restrict it to Places API (New).
+3. Paste it after `GOOGLE_PLACES_API_KEY=` in `.env` and restart the app.
+
+Each bookable stop costs about 3–4 US cents with Google, plus a few model calls, and adds a few seconds to planning.
 - `app.py` and `templates/index.html` are the page.

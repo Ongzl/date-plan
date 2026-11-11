@@ -1,3 +1,4 @@
+import json
 from datetime import date, time
 from types import SimpleNamespace
 
@@ -149,3 +150,30 @@ def test_booking_links_are_checked_before_plan_is_returned():
 
     assert suggest_plan(REQUEST, client=FakeClient(), link_checker=checker) == GOOD
     assert checked == [GOOD]
+
+
+def test_planning_model_cannot_fill_in_checked_fields():
+    stop = {"time": "14:00", "activity": "a", "place": "p", "note": "n", "reservable": True,
+            "maps_url": "https://evil.example", "checked": True}
+    reply = json.dumps({"title": "T", "stops": [stop, {**stop, "time": "15:00"}, {**stop, "time": "16:00"}]})
+    plan = suggest_plan(REQUEST, client=FakeClient(reply=reply), link_checker=lambda it: it)
+    assert all(s.maps_url == "" and not s.checked for s in plan.stops)
+
+
+def test_harness_is_used_when_places_key_is_set(monkeypatch):
+    import planner
+
+    used = []
+
+    class FakeHarness:
+        def __init__(self, client, model, key):
+            used.append((model, key))
+
+        def check_itinerary(self, itinerary, area):
+            used.append(area)
+            return itinerary
+
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "k")
+    monkeypatch.setattr(planner, "ReservationHarness", FakeHarness)
+    suggest_plan(REQUEST, client=FakeClient())
+    assert used == [("glm-5.3-flash", "k"), "Tiong Bahru"]

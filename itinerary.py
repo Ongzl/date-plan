@@ -49,14 +49,20 @@ class Stop(BaseModel):
     note: str
     # The model's best guess at whether the place takes bookings. Not checked.
     reservable: bool = False
-    # The model's guess at the reservation page. planner.py drops it unless the page loads.
+    # The reservation page. Only kept once checked (links.py or reservations.py).
     booking_url: str = ""
+    # The place's Google Maps page, from Google Places (reservations.py).
+    maps_url: str = ""
+    # True once reservations.py has confirmed `reservable` with Google or a real booking page.
+    checked: bool = False
 
     @property
     def reservation_url(self) -> str:
-        """Where the Reserve button goes: the checked booking page, or a search for one."""
+        """Where the Reserve button goes: the booking page, else Google Maps, else a search."""
         if self.booking_url:
             return self.booking_url
+        if self.maps_url:
+            return self.maps_url
         return "https://www.google.com/search?" + urlencode({"q": f"{self.place} reservation"})
 
 

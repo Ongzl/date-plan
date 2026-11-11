@@ -64,7 +64,9 @@
         {% if stop.note %}<div class="note">{{ stop.note }}</div>{% endif %}
         {% if stop.reservable %}
         <a class="reserve" href="{{ stop.reservation_url }}" target="_blank" rel="noopener noreferrer">Reserve ↗</a>
-        {% if not stop.booking_url %}<span class="hint">Opens a search for its booking page</span>{% endif %}
+        {% if stop.booking_url %}{% if stop.checked %}<span class="hint">Booking page checked</span>{% endif %}
+        {% elif stop.maps_url %}<span class="hint">{{ 'Takes bookings, says Google. ' if stop.checked else '' }}Opens it on Google Maps</span>
+        {% else %}<span class="hint">Opens a search for its booking page</span>{% endif %}
         {% endif %}
       </li>
       {% endfor %}
