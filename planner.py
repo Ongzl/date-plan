@@ -17,6 +17,7 @@ from itinerary import (
     check_itinerary,
 )
 from links import check_booking_links
+from reservations import ReservationHarness, places_key
 
 MODEL = "glm-5.3-flash"
 MODEL_LABEL = "GLM-5.3 Flash"
@@ -78,7 +79,7 @@ def read_itinerary(text: str) -> Itinerary:
     return Itinerary.model_validate_json(text[start : end + 1])
 
 
-def suggest_plan(request: PlanRequest, client=None, link_checker=check_booking_links) -> Itinerary:
+def suggest_plan(request: PlanRequest, client=None, link_checker=None) -> Itinerary:
     """Return a checked itinerary written by GLM-5.3 Flash, or raise PlanError."""
     if client is None:
         key = os.environ.get(KEY_NAME)
@@ -125,5 +126,16 @@ def suggest_plan(request: PlanRequest, client=None, link_checker=check_booking_l
     except ItineraryError:
         raise PlanError("The suggested plan didn't quite add up. Please try again.") from None
 
-    # The model's booking links are guesses: keep only the ones that actually load.
-    return link_checker(itinerary)
+    # Only the checks below may fill these in, never the planning model.
+    itinerary = itinerary.model_copy(
+        update={"stops": [s.model_copy(update={"maps_url": "", "checked": False}) for s in itinerary.stops]}
+    )
+
+    if link_checker is not None:
+        return link_checker(itinerary)
+    key = places_key()
+    if key:
+        # Let the model look each bookable stop up on Google and the web, then check what it found.
+        return ReservationHarness(client, MODEL, key).check_itinerary(itinerary, request.area)
+    # No Google key: the planner's booking links are guesses, so keep only the ones that load.
+    return check_booking_links(itinerary)
