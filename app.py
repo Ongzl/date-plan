@@ -1,5 +1,6 @@
 """The page the pair look at together."""
 
+import logging
 from datetime import date
 
 import pydantic
@@ -44,6 +45,7 @@ def create_app(planner=suggest_plan) -> Flask:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     load_dotenv()
     # Port 5000 is taken by AirPlay on macOS, so use 5001.
     create_app().run(host="127.0.0.1", port=5001, debug=True)

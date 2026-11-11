@@ -49,6 +49,8 @@ PLACES_FIELDS = ",".join(
 SINGAPORE = {"circle": {"center": {"latitude": 1.3521, "longitude": 103.8198}, "radius": 30000.0}}
 
 MAX_TURNS = 8
+MAX_TOKENS = 8000  # reasoning tokens count toward this too
+REASONING_EFFORT = "low"
 MAX_PAGE_BYTES = 600_000
 MAX_TEXT_CHARS = 2500
 TIMEOUT_SECONDS = 6
@@ -234,6 +236,9 @@ class ReservationHarness:
     def _find_place(self, session: _Session, query: str) -> dict:
         found = []
         for place in self.search(query, self.places_key)[:3]:
+            # Google often lists websites as http://; only https pages are opened, so upgrade them.
+            if (place.get("websiteUri") or "").startswith("http://"):
+                place = {**place, "websiteUri": "https://" + place["websiteUri"][len("http://"):]}
             session.places[place.get("id", "")] = place
             for key in ("websiteUri", "googleMapsUri"):
                 if place.get(key):
@@ -302,7 +307,15 @@ class ReservationHarness:
             {"role": "user", "content": f"Place: {stop.place}\nArea: {area}, Singapore\nWhat they'll do there: {stop.activity}"},
         ]
         for _ in range(MAX_TURNS):
-            response = self.client.chat.completions.create(model=self.model, max_tokens=2000, messages=messages, tools=TOOLS)
+            response = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=MAX_TOKENS,
+                # Without this, each step reasons for up to a minute. Each step is a small
+                # lookup, and the answer is checked afterwards anyway.
+                reasoning_effort=REASONING_EFFORT,
+                messages=messages,
+                tools=TOOLS,
+            )
             if self.model not in (response.model or "").lower():
                 raise RuntimeError(f"reply came from {response.model!r}")
             message = response.choices[0].message

@@ -1,6 +1,7 @@
 """Ask GLM-5.3 Flash (through OpenCode) for a suggested meet-up plan."""
 
 import json
+import logging
 import os
 
 import openai
@@ -19,8 +20,13 @@ from itinerary import (
 from links import check_booking_links
 from reservations import ReservationHarness, places_key
 
+logger = logging.getLogger(__name__)
+
 MODEL = "glm-5.3-flash"
 MODEL_LABEL = "GLM-5.3 Flash"
+# Reasoning tokens count toward this, and the model can reason for 5,000+ tokens.
+MAX_TOKENS = 16000
+ATTEMPTS = 2
 # OpenCode's OpenAI-compatible endpoint; the SDK adds /chat/completions.
 BASE_URL = "https://opencode.ai/inference/openai/v1"
 KEY_NAME = "OPENCODE_API_KEY"
@@ -87,10 +93,32 @@ def suggest_plan(request: PlanRequest, client=None, link_checker=None) -> Itiner
             raise PlanError(f"No OpenCode API key found. Add {KEY_NAME} to your .env file.")
         client = openai.OpenAI(api_key=key, base_url=BASE_URL)
 
+    # GLM-5.3 Flash reasons before it answers, and its reasoning counts toward
+    # max_tokens. Now and then it reasons for so long that no answer is left, so
+    # allow plenty of room and ask once more if the reply can't be read.
+    for attempt in range(1, ATTEMPTS + 1):
+        itinerary = _ask_for_plan(client, request)
+        if itinerary is not None:
+            break
+        logger.warning("Plan reply %d of %d couldn't be read", attempt, ATTEMPTS)
+    else:
+        raise PlanError(TRY_AGAIN)
+
+    try:
+        itinerary = check_itinerary(itinerary, request)
+    except MissingCuisineError:
+        raise PlanError(f"The suggested plan didn't include a {request.cuisine} meal. Please try again.") from None
+    except ItineraryError:
+        raise PlanError("The suggested plan didn't quite add up. Please try again.") from None
+    return _finish(itinerary, request, client, link_checker)
+
+
+def _ask_for_plan(client, request: PlanRequest) -> Itinerary | None:
+    """One request to the model. Returns None if the reply can't be read as a plan."""
     try:
         response = client.chat.completions.create(
             model=MODEL,
-            max_tokens=8000,
+            max_tokens=MAX_TOKENS,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": build_prompt(request)},
@@ -115,17 +143,13 @@ def suggest_plan(request: PlanRequest, client=None, link_checker=None) -> Itiner
 
     reply = response.choices[0].message.content if response.choices else None
     try:
-        itinerary = read_itinerary(reply or "")
+        return read_itinerary(reply or "")
     except (ValueError, pydantic.ValidationError):
-        raise PlanError(TRY_AGAIN) from None
+        return None
 
-    try:
-        itinerary = check_itinerary(itinerary, request)
-    except MissingCuisineError:
-        raise PlanError(f"The suggested plan didn't include a {request.cuisine} meal. Please try again.") from None
-    except ItineraryError:
-        raise PlanError("The suggested plan didn't quite add up. Please try again.") from None
 
+def _finish(itinerary: Itinerary, request: PlanRequest, client, link_checker) -> Itinerary:
+    """Check the plan's booking details before it is shown."""
     # Only the checks below may fill these in, never the planning model.
     itinerary = itinerary.model_copy(
         update={"stops": [s.model_copy(update={"maps_url": "", "checked": False}) for s in itinerary.stops]}
