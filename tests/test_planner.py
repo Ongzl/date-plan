@@ -7,6 +7,7 @@ import openai
 import pytest
 
 from itinerary import Itinerary, PlanRequest, Stop
+from reservations import PlaceCheck, place_name
 from planner import SYSTEM_PROMPT, PlanError, build_prompt, read_itinerary, suggest_plan
 
 REQUEST = PlanRequest(day=date(2026, 11, 14), start_time=time(14, 0), area="Tiong Bahru")
@@ -204,3 +205,113 @@ def test_leaves_room_for_reasoning():
     client = FakeClient()
     suggest_plan(REQUEST, client=client, link_checker=lambda it: it)
     assert client.calls[0]["max_tokens"] >= 16000
+
+
+# --- Checking places on Google Maps ---
+
+CLOSED_PLAN = Itinerary(
+    title="T",
+    stops=[*GOOD.stops[:2], Stop(time="16:30", activity="Dinner", place="Muchacho, 60 Tras Street", note="n"), GOOD.stops[2].model_copy(update={"time": "18:00"})],
+)
+
+
+class ReplyQueue(FakeClient):
+    """Gives each reply in turn."""
+
+    def __init__(self, *replies):
+        super().__init__()
+        self.replies = [r.model_dump_json() for r in replies]
+
+    def _create(self, **kwargs):
+        self._reply = self.replies.pop(0)
+        return super()._create(**kwargs)
+
+
+def google_says(closed=(), listings=None):
+    """Fake place checker: names in `closed` have closed; `listings` maps names to Google listings."""
+    listings = listings or {}
+
+    def check(itinerary, area):
+        return [
+            PlaceCheck(i, s.place, "has closed for good" if place_name(s.place) in closed else "", listings.get(place_name(s.place)))
+            for i, s in enumerate(itinerary.stops)
+        ]
+
+    return check
+
+
+def plan_with(place_checker, client=None):
+    return suggest_plan(REQUEST, client=client or FakeClient(), link_checker=lambda it: it, place_checker=place_checker)
+
+
+def test_plan_with_a_closed_place_is_asked_for_again_naming_it():
+    client = ReplyQueue(CLOSED_PLAN, GOOD)
+    plan = plan_with(google_says(closed={"Muchacho"}), client)
+    assert [s.place for s in plan.stops] == [s.place for s in GOOD.stops]
+    assert "have closed, so don't suggest them: Muchacho, 60 Tras Street" in client.calls[1]["messages"][1]["content"]
+    assert "closed" not in client.calls[0]["messages"][1]["content"]
+
+
+def test_closed_place_is_removed_if_it_keeps_coming_back():
+    client = ReplyQueue(CLOSED_PLAN, CLOSED_PLAN, CLOSED_PLAN)
+    plan = plan_with(google_says(closed={"Muchacho"}), client)
+    assert len(client.calls) == 3
+    assert [s.place for s in plan.stops] == [s.place for s in GOOD.stops]
+
+
+def test_gives_up_if_removing_closed_places_leaves_too_few_stops():
+    client = ReplyQueue(GOOD, GOOD, GOOD)
+    with pytest.raises(PlanError, match="closed"):
+        plan_with(google_says(closed={s.place for s in GOOD.stops}), client)
+
+
+def test_open_plan_is_not_asked_again():
+    client = FakeClient()
+    plan_with(google_says(), client)
+    assert len(client.calls) == 1
+
+
+def test_plan_shows_google_address_not_the_planners():
+    bakery = {
+        "id": "tbb-1",
+        "displayName": {"text": "Tiong Bahru Bakery"},
+        "formattedAddress": "56 Eng Hoon St, #01-70, Singapore 160056",
+        "googleMapsUri": "https://maps.google.com/?cid=7",
+        "businessStatus": "OPERATIONAL",
+    }
+    first = GOOD.stops[0].model_copy(update={"place": "Tiong Bahru Bakery, 1 Made Up Road"})
+    planned = GOOD.model_copy(update={"stops": [first, *GOOD.stops[1:]]})
+    stops = plan_with(google_says(listings={"Tiong Bahru Bakery": bakery}), FakeClient(reply=planned.model_dump_json())).stops
+    assert (stops[0].place, stops[0].address, stops[0].place_id) == (
+        "Tiong Bahru Bakery",
+        "56 Eng Hoon St, #01-70, Singapore 160056",
+        "tbb-1",
+    )
+    assert all(s.address == "" for s in stops[1:])  # not on Google: no address shown
+
+
+def test_planning_model_cannot_fill_in_google_fields():
+    stop = {"time": "14:00", "activity": "a", "place": "p", "note": "n",
+            "address": "1 Fake St", "place_id": "fake", "maps_url": "https://evil.example", "checked": True}
+    reply = json.dumps({"title": "T", "stops": [stop, {**stop, "time": "15:00"}, {**stop, "time": "16:00"}]})
+    plan = suggest_plan(REQUEST, client=FakeClient(reply=reply), link_checker=lambda it: it)
+    assert all(s.address == "" and s.place_id == "" and s.maps_url == "" and not s.checked for s in plan.stops)
+
+
+def test_places_are_checked_on_google_when_key_is_set(monkeypatch):
+    import planner
+
+    seen = []
+
+    def fake_check(itinerary, area, key):
+        seen.append((area, key))
+        return [PlaceCheck(i, s.place) for i, s in enumerate(itinerary.stops)]
+
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "k")
+    monkeypatch.setattr(planner, "check_places", fake_check)
+    suggest_plan(REQUEST, client=FakeClient(), link_checker=lambda it: it)
+    assert seen == [("Tiong Bahru", "k")]
+
+
+def test_without_google_key_places_are_left_as_planned():
+    assert suggest_plan(REQUEST, client=FakeClient(), link_checker=lambda it: it) == GOOD

@@ -56,6 +56,9 @@ class Stop(BaseModel):
     maps_url: str = ""
     # True once reservations.py has confirmed `reservable` with Google or a real booking page.
     checked: bool = False
+    # The place's address and id on Google Maps (reservations.py). Never from the planning model.
+    address: str = ""
+    place_id: str = ""
 
     @property
     def reservation_url(self) -> str:
