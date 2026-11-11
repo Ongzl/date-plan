@@ -1,6 +1,7 @@
 """What a meet-up plan looks like, and the rules a good one follows."""
 
 from datetime import date, time
+from urllib.parse import urlencode
 
 from pydantic import BaseModel, field_validator
 
@@ -46,6 +47,17 @@ class Stop(BaseModel):
     activity: str
     place: str
     note: str
+    # The model's best guess at whether the place takes bookings. Not checked.
+    reservable: bool = False
+    # The model's guess at the reservation page. planner.py drops it unless the page loads.
+    booking_url: str = ""
+
+    @property
+    def reservation_url(self) -> str:
+        """Where the Reserve button goes: the checked booking page, or a search for one."""
+        if self.booking_url:
+            return self.booking_url
+        return "https://www.google.com/search?" + urlencode({"q": f"{self.place} reservation"})
 
 
 class Itinerary(BaseModel):

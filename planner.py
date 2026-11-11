@@ -16,6 +16,7 @@ from itinerary import (
     PlanRequest,
     check_itinerary,
 )
+from links import check_booking_links
 
 MODEL = "glm-5.3-flash"
 MODEL_LABEL = "GLM-5.3 Flash"
@@ -34,15 +35,21 @@ moderately priced, and use real places in or near the area they give, with \
 realistic travel time between stops.
 
 For each stop give: the start time as HH:MM in 24-hour time, the activity, the \
-place, and a one-line note on why it helps them get to know each other. The \
-first stop starts at the time they give. Give the plan a short, friendly title.
+place, a one-line note on why it helps them get to know each other, and \
+"reservable": true if the place usually takes table or slot bookings (most \
+sit-down restaurants and cafés, classes, workshops), otherwise false (hawker \
+centres, parks, walks, shops). For a reservable place, also give \
+"booking_url": the full https address of its online reservation page (its own \
+site, or its page on a booking platform such as Chope, SevenRooms or \
+TableCheck) if you know it; otherwise "". The first stop starts at the time \
+they give. Give the plan a short, friendly title.
 
 If they give a cuisine, one of the stops must be a meal at a real place that \
 serves that cuisine, and that stop's activity must name the cuisine, for \
 example "Malay lunch".
 
 Reply with only a JSON object, no other text, in exactly this shape:
-{{"title": "...", "stops": [{{"time": "14:00", "activity": "...", "place": "...", "note": "..."}}]}}"""
+{{"title": "...", "stops": [{{"time": "14:00", "activity": "...", "place": "...", "note": "...", "reservable": false, "booking_url": ""}}]}}"""
 
 TRY_AGAIN = "Couldn't make a plan this time. Please try again."
 
@@ -71,7 +78,7 @@ def read_itinerary(text: str) -> Itinerary:
     return Itinerary.model_validate_json(text[start : end + 1])
 
 
-def suggest_plan(request: PlanRequest, client=None) -> Itinerary:
+def suggest_plan(request: PlanRequest, client=None, link_checker=check_booking_links) -> Itinerary:
     """Return a checked itinerary written by GLM-5.3 Flash, or raise PlanError."""
     if client is None:
         key = os.environ.get(KEY_NAME)
@@ -112,8 +119,11 @@ def suggest_plan(request: PlanRequest, client=None) -> Itinerary:
         raise PlanError(TRY_AGAIN) from None
 
     try:
-        return check_itinerary(itinerary, request)
+        itinerary = check_itinerary(itinerary, request)
     except MissingCuisineError:
         raise PlanError(f"The suggested plan didn't include a {request.cuisine} meal. Please try again.") from None
     except ItineraryError:
         raise PlanError("The suggested plan didn't quite add up. Please try again.") from None
+
+    # The model's booking links are guesses: keep only the ones that actually load.
+    return link_checker(itinerary)
