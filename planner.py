@@ -73,6 +73,10 @@ def suggest_plan(request: PlanRequest, client=None) -> Itinerary:
         )
     except openai.AuthenticationError:
         raise PlanError("The OpenCode API key is missing or wrong. Check your .env file.") from None
+    except openai.PermissionDeniedError:
+        raise PlanError(
+            "OpenCode won't let this key use Kimi K3. Turn on Kimi K3 under Models in your OpenCode console."
+        ) from None
     except openai.RateLimitError:
         raise PlanError("Too many requests, or out of OpenCode credit. Wait a minute and try again.") from None
     except openai.APIConnectionError:

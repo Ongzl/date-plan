@@ -90,6 +90,7 @@ def test_missing_key_becomes_friendly_error(monkeypatch):
     "error, message",
     [
         (api_error(openai.AuthenticationError, 401), "API key"),
+        (api_error(openai.PermissionDeniedError, 403), "Turn on Kimi K3"),
         (api_error(openai.RateLimitError, 429), "Too many requests"),
         (openai.APIConnectionError(request=httpx2.Request("POST", "https://x")), "internet"),
         (api_error(openai.InternalServerError, 500), "try again"),
